@@ -1,0 +1,82 @@
+
+name: Build Laqta Pro APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Extract project ZIP
+        run: |
+          mkdir app-source
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
+          test -n "$ZIP_FILE" || { echo "Project ZIP not found"; exit 1; }
+          unzip -q "$ZIP_FILE" -d app-source
+          PACKAGE_FILE=$(find app-source -name package.json -not -path '*/node_modules/*' -print -quit)
+          test -n "$PACKAGE_FILE" || { echo "package.json not found"; exit 1; }
+          echo "APP_DIR=$(dirname "$PACKAGE_FILE")" >> "$GITHUB_ENV"
+
+      - name: Install and build web app
+        run: |
+          cd "$APP_DIR"
+          npm install
+          npm run build
+
+      - name: Prepare Capacitor Android
+        run: |
+          cd "$APP_DIR"
+          npm install @capacitor/core@8.5.3 @capacitor/cli@8.5.3 @capacitor/android@8.5.3
+
+          if [ -d dist ]; then
+            WEB_DIR=dist
+          elif [ -d out ]; then
+            WEB_DIR=out
+          elif [ -d build ]; then
+            WEB_DIR=build
+          else
+            echo "No static web output found. Check the app build configuration."
+            exit 1
+          fi
+
+          node -e "require('fs').writeFileSync('capacitor.config.json', JSON.stringify({appId:'com.laqtapro.editor',appName:'Laqta Pro',webDir:'$WEB_DIR',server:{androidScheme:'https'}},null,2))"
+
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+          npx cap sync android
+
+      - name: Build APK
+        run: |
+          cd "$APP_DIR"
+          test -f android/gradlew || { echo "Gradle wrapper not found"; exit 1; }
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: laqta-pro-apk
+          path: "**/build/outputs/apk/debug/*.apk"
+          if-no-files-found: error
